@@ -3,19 +3,21 @@ module.exports = {
     name: "gart",
     version: "1.0.0",
     permission: 0,
-    credits: "Nayan",
-    description: "Generate images with a prompt, style, and specified amount using the second API.",
+    credits: "Tofazzal Hossain", 
+    description: "Generate images with a prompt, style, and specified amount from the provided API.",
     prefix: true,
     category: "prefix",
-    usages: "[prompt] .stl [style] .cnt [amount (optional)]",
+    usages: "[prompt] .stl [style] .cnt [amount (optional)]", 
     cooldowns: 10,
   },
 
   languages: {
     "vi": {},
     "en": {
-      "missing_prompt_style": 'Please provide both a prompt and a style using the format: /imagine2 [your prompt] .stl [your style] .cnt [amount (optional)]\nExample: /imagine2 a-boy-is-playing .stl logo .cnt 2',
-      "invalid_amount": "The amount must be a number greater than 0."
+      "missing_prompt_style": 'Please provide both a prompt and a style using the format: /gart [your prompt] .stl [your style] .cnt [amount (optional)]\nExample: /gart a-boy-is-playing .stl logo .cnt 2',
+      "invalid_amount": "The amount must be a number greater than 0 and less than or equal to 4.", // 4 এর বেশি ছবি জেনারেট করা যাবে না
+      "error_generating": "An error occurred while generating the image(s). Please check your prompt and style, then try again later.",
+      "no_images_generated": "Could not generate any images. Please try a different prompt or style."
     }
   },
 
@@ -25,26 +27,31 @@ module.exports = {
 
     let prompt = "";
     let style = "";
-    let amount = 1; // Default amount of images
+    let amount = 1; // Default amount of images is 1 (পরিবর্তিত)
 
+    // Find the positions of '.stl' and '.cnt'
     const stlIndex = args.indexOf(".stl");
     const cntIndex = args.indexOf(".cnt");
 
-    if (stlIndex === -1 || stlIndex === 0 || (cntIndex !== -1 && cntIndex < stlIndex)) {
+    // Validate command structure
+    if (stlIndex === -1 || stlIndex === 0) { // .stl থাকতে হবে এবং তা প্রম্পটের পরে
       return nayan.reply(lang('missing_prompt_style'), events.threadID, events.messageID);
     }
 
+    // Extract prompt
     prompt = args.slice(0, stlIndex).join(" ");
 
-    if (cntIndex !== -1) {
+    // Extract style
+    if (cntIndex !== -1 && cntIndex > stlIndex) { // If .cnt is present after .stl
       style = args.slice(stlIndex + 1, cntIndex).join(" ");
-    } else {
+    } else { // If only .stl is present or .cnt is in wrong place
       style = args.slice(stlIndex + 1).join(" ");
     }
 
-    if (cntIndex !== -1) {
+    // Extract amount if .cnt is present and valid
+    if (cntIndex !== -1 && cntIndex > stlIndex) {
       const parsedAmount = parseInt(args[cntIndex + 1]);
-      if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      if (isNaN(parsedAmount) || parsedAmount <= 0 || parsedAmount > 4) { // সর্বোচ্চ 4টি ছবি
         return nayan.reply(lang('invalid_amount'), events.threadID, events.messageID);
       }
       amount = parsedAmount;
@@ -54,12 +61,12 @@ module.exports = {
       return nayan.reply(lang('missing_prompt_style'), events.threadID, events.messageID);
     }
 
-    // --- Added: Immediate reply to user ---
-    await nayan.reply("Generating image(s)... Please wait.", events.threadID, events.messageID);
-    // --- End Added ---
-
     let imgData = [];
     let generatedCount = 0;
+    
+    // ছবি জেনারেট হওয়ার আগে একটি লোডিং মেসেজ পাঠান
+    const loadingMessage = await nayan.reply("Generating your image(s)... Please wait.", events.threadID, events.messageID);
+
 
     try {
       for (let i = 0; i < amount; i++) {
@@ -67,31 +74,38 @@ module.exports = {
 
         const res = await axios.get(apiUrl);
 
-        if (res.data && res.data.url) {
+        if (res.data && res.data.ok === true && res.data.url) { // API response চেক করা হয়েছে
           const imageUrl = res.data.url;
-          const path = __dirname + `/cache/imagine2_${events.senderID}_${Date.now()}_${i}.jpg`;
+          // প্রতিটি ছবির জন্য একটি অনন্য ফাইল পাথ তৈরি করুন
+          const path = __dirname + `/cache/gart_image_${events.senderID}_${Date.now()}_${i}.png`; 
           const getDown = (await axios.get(imageUrl, { responseType: 'arraybuffer' })).data;
           fs.writeFileSync(path, Buffer.from(getDown, 'binary'));
           imgData.push(fs.createReadStream(path));
           generatedCount++;
         } else {
-          console.warn(`API did not return an image URL for prompt "${prompt}" and style "${style}" (attempt ${i + 1}).`);
+          console.warn(`API did not return a valid image URL for prompt "${prompt}" and style "${style}" (attempt ${i + 1}). Response: ${JSON.stringify(res.data)}`);
         }
       }
 
+      // লোডিং মেসেজটি ডিলিট করুন
+      await nayan.unsend(loadingMessage.messageID);
+
       if (imgData.length === 0) {
-        return nayan.reply("Could not generate any images. Please try a different prompt or style.", events.threadID, events.messageID);
+        return nayan.reply(lang('no_images_generated'), events.threadID, events.messageID);
       }
 
       await nayan.reply({
         attachment: imgData,
-        body: `🔍Imagine Result🔍\n\n📝Prompt: ${prompt}\n✨Style: ${style}\n#️⃣Generated Images: ${generatedCount}`
+        body: `🔍Imagine Result🔍\n\n📝Prompt: ${prompt}\n✨Style: ${style}\n#️⃣Generated Images: ${generatedCount}\n\nGenerated by: Tofazzal Hossain`
       }, events.threadID, events.messageID);
 
     } catch (error) {
-      console.error("Error in imagine2 command:", error);
-      return nayan.reply("An error occurred while generating the image(s). Please check your prompt and style, then try again later.", events.threadID, events.messageID);
+      // লোডিং মেসেজটি ডিলিট করুন যদি কোনো ত্রুটি হয়
+      await nayan.unsend(loadingMessage.messageID);
+      console.error("Error in gart command:", error);
+      return nayan.reply(lang('error_generating'), events.threadID, events.messageID);
     } finally {
+      // Clean up cached images
       for (const stream of imgData) {
         if (fs.existsSync(stream.path)) {
           fs.unlinkSync(stream.path);
