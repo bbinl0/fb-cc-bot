@@ -1,23 +1,22 @@
 module.exports = {
   config: {
-    name: "gart",
+    name: "gart", // কমান্ডের নাম 'gart' এ পরিবর্তন করা হয়েছে
     version: "1.0.0",
     permission: 0,
-    credits: "Tofazzal Hossain", // ক্রেডিট Tofazzal Hossain-এ আপডেট করা হয়েছে
-    description: "Generate images with a prompt, style, and specified amount from the provided API.",
+    credits: "Nayan", // ক্রেডিট অপরিবর্তিত রাখা হয়েছে
+    description: "Generate images from a prompt with an optional style and amount.",
     prefix: true,
     category: "prefix",
-    usages: "[prompt] .stl [style] .cnt [amount (optional)]", 
+    usages: "gart [prompt] .stl [style] .cnt [amount]", // ব্যবহারের নির্দেশিকা আপডেট করা হয়েছে
     cooldowns: 10,
   },
 
   languages: {
     "vi": {},
     "en": {
-      "missing_prompt_style": 'Please provide both a prompt and a style using the format: /gart [your prompt] .stl [your style] .cnt [amount (optional)]\nExample: /gart a-boy-is-playing .stl logo .cnt 2',
-      "invalid_amount": "The amount must be a number greater than 0 and less than or equal to 4.", // 4 এর বেশি ছবি জেনারেট করা যাবে না
-      "error_generating": "An error occurred while generating the image(s). Please check your prompt and style, then try again later.",
-      "no_images_generated": "Could not generate any images. Please try a different prompt or style."
+      "missing_prompt": 'Please provide a prompt. Usage: /gart a cat .stl anime .cnt 2',
+      "generating_message": "Generating your image(s), please wait...", // নতুন মেসেজ
+      "error": "An error occurred while generating the image. Please try again later."
     }
   },
 
@@ -25,92 +24,73 @@ module.exports = {
     const axios = require("axios");
     const fs = require("fs-extra");
 
+    // prompt, style এবং amount আলাদা করা
     let prompt = "";
     let style = "";
-    let amount = 1; // Default amount of images is 1 (পরিবর্তিত)
+    let amount = 1; // Default to 1 image
 
-    // Find the positions of '.stl' and '.cnt'
-    const stlIndex = args.indexOf(".stl");
-    const cntIndex = args.indexOf(".cnt");
+    const argString = args.join(" ");
+    const promptMatch = argString.match(/(.*?)(?:\s*\.stl\s*(.*?))?(?:\s*\.cnt\s*(\d+))?$/i);
 
-    // Validate command structure
-    if (stlIndex === -1 || stlIndex === 0) { // .stl থাকতে হবে এবং তা প্রম্পটের পরে
-      return nayan.reply(lang('missing_prompt_style'), events.threadID, events.messageID);
+    if (promptMatch) {
+      prompt = promptMatch[1].trim();
+      style = promptMatch[2] ? promptMatch[2].trim() : "";
+      amount = promptMatch[3] ? parseInt(promptMatch[3]) : 1;
     }
 
-    // Extract prompt
-    prompt = args.slice(0, stlIndex).join(" ");
-
-    // Extract style
-    if (cntIndex !== -1 && cntIndex > stlIndex) { // If .cnt is present after .stl
-      style = args.slice(stlIndex + 1, cntIndex).join(" ");
-    } else { // If only .stl is present or .cnt is in wrong place
-      style = args.slice(stlIndex + 1).join(" ");
+    if (!prompt) {
+      return nayan.reply(lang('missing_prompt'), events.threadID, events.messageID);
     }
 
-    // Extract amount if .cnt is present and valid
-    if (cntIndex !== -1 && cntIndex > stlIndex) {
-      const parsedAmount = parseInt(args[cntIndex + 1]);
-      if (isNaN(parsedAmount) || parsedAmount <= 0 || parsedAmount > 4) { // সর্বোচ্চ 4টি ছবি
-        return nayan.reply(lang('invalid_amount'), events.threadID, events.messageID);
-      }
-      amount = parsedAmount;
+    // সর্বোচ্চ 4টি ইমেজ জেনারেট করার জন্য সীমাবদ্ধতা
+    if (amount > 4) {
+      amount = 4;
+      nayan.reply("You can generate a maximum of 4 images at a time. Generating 4 images.", events.threadID, events.messageID);
     }
 
-    if (!prompt || !style) {
-      return nayan.reply(lang('missing_prompt_style'), events.threadID, events.messageID);
-    }
-
-    let imgData = [];
-    let generatedCount = 0;
-    
-    // ছবি জেনারেট হওয়ার আগে একটি লোডিং মেসেজ পাঠান
-    const loadingMessage = await nayan.reply("Generating your image(s)... Please wait.", events.threadID, events.messageID);
-
+    // তাৎক্ষণিক রিপ্লাই
+    nayan.reply(lang('generating_message'), events.threadID, events.messageID);
 
     try {
+      const imgData = [];
       for (let i = 0; i < amount; i++) {
         const apiUrl = `https://imggen-delta.vercel.app/?prompt=${encodeURIComponent(prompt)}&style=${encodeURIComponent(style)}`;
-
         const res = await axios.get(apiUrl);
 
-        if (res.data && res.data.ok === true && res.data.url) { // API response চেক করা হয়েছে
-          const imageUrl = res.data.url;
-          // প্রতিটি ছবির জন্য একটি অনন্য ফাইল পাথ তৈরি করুন
-          const path = __dirname + `/cache/gart_image_${events.senderID}_${Date.now()}_${i}.png`; 
-          const getDown = (await axios.get(imageUrl, { responseType: 'arraybuffer' })).data;
-          fs.writeFileSync(path, Buffer.from(getDown, 'binary'));
-          imgData.push(fs.createReadStream(path));
-          generatedCount++;
-        } else {
-          console.warn(`API did not return a valid image URL for prompt "${prompt}" and style "${style}" (attempt ${i + 1}). Response: ${JSON.stringify(res.data)}`);
-        }
-      }
+        const imageUrl = res.data.url;
 
-      // লোডিং মেসেজটি ডিলিট করুন
-      await nayan.unsend(loadingMessage.messageID);
+        if (!imageUrl) {
+          // যদি কোনো কারণে URL না পাওয়া যায়, তবে লুপ ব্রেক করে দেওয়া
+          console.error("No image URL found from API for iteration", i);
+          if (imgData.length === 0) { // যদি কোনো ইমেজই জেনারেট না হয়
+            return nayan.reply(lang('error'), events.threadID, events.messageID);
+          }
+          break;
+        }
+
+        const path = __dirname + `/cache/gart_result_${i + 1}.png`;
+        const getDown = (await axios.get(imageUrl, { responseType: 'arraybuffer' })).data;
+        fs.writeFileSync(path, Buffer.from(getDown, 'utf-8'));
+        imgData.push(fs.createReadStream(path));
+      }
 
       if (imgData.length === 0) {
-        return nayan.reply(lang('no_images_generated'), events.threadID, events.messageID);
+        return nayan.reply(lang('error'), events.threadID, events.messageID);
       }
 
-      await nayan.reply({
+      nayan.reply({
         attachment: imgData,
-        body: `🔍Imagine Result🔍\n\n📝Prompt: ${prompt}\n✨Style: ${style}\n#️⃣Generated Images: ${generatedCount}\n\nGenerated by: Tofazzal Hossain`
-      }, events.threadID, events.messageID);
+        body: `🔍Imagine Result🔍\n\n📝Prompt: ${prompt}\n${style ? `🎨Style: ${style}\n` : ''}#️⃣Number of Images: ${imgData.length}`
+      }, events.threadID, () => {
+        // সব ইমেজ পাঠানোর পর ক্যাশ ফাইলগুলো ডিলিট করা
+        for (let i = 0; i < imgData.length; i++) {
+          fs.unlinkSync(__dirname + `/cache/gart_result_${i + 1}.png`);
+        }
+      });
 
     } catch (error) {
-      // লোডিং মেসেজটি ডিলিট করুন যদি কোনো ত্রুটি হয়
-      await nayan.unsend(loadingMessage.messageID);
-      console.error("Error in gart command:", error);
-      return nayan.reply(lang('error_generating'), events.threadID, events.messageID);
-    } finally {
-      // Clean up cached images
-      for (const stream of imgData) {
-        if (fs.existsSync(stream.path)) {
-          fs.unlinkSync(stream.path);
-        }
-      }
+      console.error("Gart command error:", error);
+      nayan.reply(lang('error'), events.threadID, events.messageID);
     }
   }
 };
